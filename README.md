@@ -2,6 +2,8 @@
 
 A simple, encouraging workout app for your phone. You pick a workout, tick off each set and get cheered on. It counts down your rest and calls you back for the next set.
 
+![RepUp screens: home, exercise, rest, let's go, exercise done, summary](docs/screens.png)
+
 It's a web app (PWA): no app store and no build step. Open it in your phone's browser and add it to your home screen, and it runs full-screen like a normal app. It also works offline.
 
 ## What it does
