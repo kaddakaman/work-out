@@ -1,5 +1,5 @@
 // Offline support: cache the app shell, serve it when there's no connection.
-const CACHE = 'repup-v1';
+const CACHE = 'repup-v2';
 const SHELL = [
   './', 'index.html', 'css/app.css', 'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-192.png',
   'js/app.js', 'js/data.js', 'js/figure.js', 'js/fx.js', 'js/spotify.js', 'js/store.js',

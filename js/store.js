@@ -90,6 +90,39 @@ export function lastPerformance(exId) {
   return null;
 }
 
+// Records for an exercise across history, plus any extra sets (e.g. earlier sets in today's session).
+// repsAt / secsAt are keyed by load ('bw' for bodyweight), so "more reps at the same weight" counts.
+export function records(exId, extra = []) {
+  const sets = [];
+  for (const h of state.history) for (const e of h.exercises) if (e.exId === exId) sets.push(...e.sets);
+  sets.push(...extra);
+  if (!sets.length) return null;
+  const r = { maxLoad: null, repsAt: {}, secsAt: {}, count: sets.length };
+  for (const s of sets) {
+    const key = s.load ?? 'bw';
+    if (typeof s.load === 'number') r.maxLoad = r.maxLoad === null ? s.load : Math.max(r.maxLoad, s.load);
+    if (s.reps != null) r.repsAt[key] = Math.max(r.repsAt[key] ?? 0, s.reps);
+    if (s.secs != null) r.secsAt[key] = Math.max(r.secsAt[key] ?? 0, s.secs);
+  }
+  return r;
+}
+
+// All-time best per exercise: [{ exId, load, reps, secs, date }]
+export function allRecords() {
+  const best = {};
+  for (const h of state.history) for (const e of h.exercises) for (const s of e.sets) {
+    const b = (best[e.exId] ??= { exId: e.exId, load: null, reps: null, secs: null, date: h.ended });
+    if (typeof s.load === 'number' && (b.load === null || s.load > b.load || (s.load === b.load && (s.reps ?? 0) > (b.reps ?? 0)))) {
+      b.load = s.load; b.reps = s.reps ?? null; b.secs = s.secs ?? null; b.date = h.ended;
+    } else if (b.load === null && typeof s.load !== 'number') {
+      if ((s.reps ?? 0) > (b.reps ?? 0) || (s.secs ?? 0) > (b.secs ?? 0)) { b.reps = s.reps ?? b.reps; b.secs = s.secs ?? b.secs; b.date = h.ended; }
+    }
+  }
+  return Object.values(best);
+}
+
+export const totalPRs = () => state.history.reduce((n, h) => n + (h.prs?.length ?? h.pbs?.length ?? 0), 0);
+
 export function bestLoad(exId) {
   let best = null;
   for (const h of state.history) for (const e of h.exercises) if (e.exId === exId) for (const s of e.sets) {

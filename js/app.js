@@ -1,7 +1,7 @@
 import { EQUIPMENT, MUSCLES, WARMUP, BREATHING } from './data.js';
 import {
   state, save, uid, itemFromExercise, starterWorkouts, allExercises, getExercise, hasEquipment,
-  lastPerformance, bestLoad, thisWeekCount, weekStreak, suggestedNext, replaceState, resetAll,
+  lastPerformance, bestLoad, records, allRecords, totalPRs, thisWeekCount, weekStreak, suggestedNext, replaceState, resetAll,
 } from './store.js';
 import { mountFigure } from './figure.js';
 import * as fx from './fx.js';
@@ -44,6 +44,7 @@ const P = {
   flame: '<path d="M12 3c1 3.5 5 5.5 5 10a5 5 0 0 1-10 0c0-2.5 1.5-4 2.5-5 .3 2 1.2 3 2.5 3.5C11 9 11 6 12 3z"/>',
   bolt: '<path d="M13 3L5 13.5h6L10 21l8-10.5h-6z"/>',
   wind: '<path d="M3 8h11a3 3 0 1 0-3-3M3 12h15a3 3 0 1 1-3 3M3 16h7"/>',
+  repeat: '<path d="M4 11a8 8 0 0 1 14.5-4.5L20 8M20 3.5V8h-4.5M20 13a8 8 0 0 1-14.5 4.5L4 16M4 20.5V16h4.5"/>',
   skip: '<path d="M5 6v12l7-6zM12.5 6v12l7-6z" fill="currentColor"/>',
 };
 const icon = (n, cls = 'icon') => `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${P[n]}</svg>`;
@@ -130,7 +131,7 @@ let lastRouteKey = '';
 
 const VIEWS = {
   home: homeView, library: libraryView, ex: exerciseView, edit: builderView, pick: pickerView,
-  history: historyView, settings: settingsView, play: playerView, done: summaryView, newex: customExView,
+  history: historyView, repeat: repeatView, settings: settingsView, play: playerView, done: summaryView, newex: customExView,
 };
 
 function render() {
@@ -193,12 +194,23 @@ function homeView() {
       <div class="stat"><b>${streak}${streak ? ' ' + icon('flame', 'icon') : ''}</b><span>Week streak</span></div>
       <div class="stat"><b>${state.history.length}</b><span>Workouts</span></div>
     </div>
+    ${recentSection()}
     ${Object.entries(groups).map(([g, ws]) => `
       <div class="section"><div class="section-head"><h2>${esc(g)}</h2></div>
         ${ws.map(workoutCard).join('')}
       </div>`).join('')}
     <div class="section"><a class="btn block" href="#/edit/new">${icon('plus')} Build a workout</a></div>`;
 }
+function recentSection() {
+  const recent = [...state.history].reverse().slice(0, 3);
+  if (!recent.length) return '';
+  return `<div class="section"><div class="section-head"><h2>Do it again</h2><a class="small" href="#/history">All history</a></div>
+    ${recent.map((h) => `<div class="card wk">
+      <div class="grow"><h3>${esc(h.name)}</h3>
+        <p class="small muted">${fmtDate(h.ended)} · ${pl(h.sets, 'set')}${prsOf(h).length ? ` · <span style="color:var(--gold);font-weight:700">${pl(prsOf(h).length, 'PR')}</span>` : ''}</p></div>
+      <a class="btn" href="#/repeat/${h.id}">${icon('repeat')} Repeat</a></div>`).join('')}</div>`;
+}
+const prsOf = (h) => h.prs ?? (h.pbs || []).map((exId) => ({ exId, name: getExercise(exId).name, type: 'load' }));
 function workoutCard(w) {
   const missing = [...new Set(w.items.flatMap((it) => getExercise(it.exId).equip))].filter((e) => !state.settings.equipment.includes(e));
   const names = w.items.slice(0, 4).map((it) => getExercise(it.exId).name).join(', ') + (w.items.length > 4 ? '…' : '');
@@ -212,28 +224,77 @@ function workoutCard(w) {
 }
 
 // ---------------------------------------------------------------- SESSION
-function prepItem(it) {
+function prepItem(it, preset = false) {
   const ex = getExercise(it.exId);
   const last = lastPerformance(it.exId);
   let load = null;
-  if (ex.load !== 'none') load = last?.sets[0]?.load ?? it.load ?? (ex.load === 'level' ? 5 : ex.equip.includes('dumbbells') ? 5 : 10);
+  if (ex.load !== 'none') {
+    load = preset && it.load != null ? it.load
+      : last?.sets[0]?.load ?? it.load ?? (ex.load === 'level' ? 5 : ex.equip.includes('dumbbells') ? 5 : 10);
+  }
   let suggest = null;
   if (ex.load === 'kg' && ex.mode === 'reps' && last && last.sets.length >= it.sets && last.sets.every((s) => s.reps >= it.reps[1] && s.load >= load)) {
     suggest = load + state.settings.step;
   }
   return { ...structuredClone(it), done: [], cur: { load, reps: it.reps?.[1] ?? null, secs: it.secs ?? null }, suggest };
 }
-function startWorkout(id) {
-  const w = state.workouts.find((x) => x.id === id);
-  if (!w || !w.items.length) { toast('Add some exercises to this workout first.'); return; }
+function startSession(src, preset = false) {
   if (state.active && !confirm('You have a workout in progress. Start a new one instead?')) return;
   fx.unlockAudio();
   state.active = {
-    id: uid(), workoutId: w.id, name: w.name, started: Date.now(), idx: 0,
-    phase: state.settings.warmup ? 'warmup' : 'work', warm: [], items: w.items.map(prepItem),
-    msg: null, restEnd: 0, restTotal: 0, timerEnd: 0, pbs: [],
+    id: uid(), workoutId: src.workoutId, name: src.name, started: Date.now(), idx: 0,
+    phase: state.settings.warmup ? 'warmup' : 'work', warm: [], items: src.items.map((it) => prepItem(it, preset)),
+    msg: null, restEnd: 0, restTotal: 0, timerEnd: 0, prs: [], beat: [],
   };
   save(); go('play');
+}
+function startWorkout(id) {
+  const w = state.workouts.find((x) => x.id === id);
+  if (!w || !w.items.length) { toast('Add some exercises to this workout first.'); return; }
+  startSession({ workoutId: w.id, name: w.name, items: w.items });
+}
+
+// ---- Records ----
+const sessionSets = (a, exId, exclude) => a.items.filter((it) => it.exId === exId).flatMap((it) => it.done).filter((s) => s !== exclude);
+const maxLoadOf = (sets) => sets.reduce((m, s) => (typeof s.load === 'number' && (m === null || s.load > m) ? s.load : m), null);
+function detectPR(a, ex, s) {
+  const prior = records(ex.id, sessionSets(a, ex.id, s));
+  if (!prior) return null; // first time ever: nothing to beat yet
+  const key = s.load ?? 'bw';
+  if (typeof s.load === 'number' && prior.maxLoad !== null && s.load > prior.maxLoad) return { type: ex.load === 'level' ? 'level' : 'load', from: prior.maxLoad, to: s.load };
+  if (s.reps != null && prior.repsAt[key] != null && s.reps > prior.repsAt[key]) return { type: 'reps', from: prior.repsAt[key], to: s.reps, at: s.load ?? null };
+  if (s.secs != null && prior.secsAt[key] != null && s.secs > prior.secsAt[key]) return { type: 'time', from: prior.secsAt[key], to: s.secs, at: s.load ?? null };
+  return null;
+}
+function prText(ex, p) {
+  if (p.from == null) return 'New best';
+  const at = p.at != null ? ` at ${loadText(ex, p.at)}` : '';
+  if (p.type === 'load') return `${fmtNum(p.from)} → ${fmtNum(p.to)} ${unitLabel()}`;
+  if (p.type === 'level') return `Level ${p.from} → ${p.to}`;
+  if (p.type === 'reps') return `${p.from} → ${p.to} reps${at}`;
+  return `${fmtSecs(p.from)} → ${fmtSecs(p.to)}${at}`;
+}
+// Live hint under the steppers: "PR attempt!" / "Up from 20 kg last time"
+function prChip(a, it, ex) {
+  const r = records(ex.id, sessionSets(a, ex.id));
+  if (!r) return '';
+  const cur = it.cur;
+  if (typeof cur.load === 'number' && r.maxLoad !== null && cur.load > r.maxLoad) {
+    return `<span class="chip warn pr-try">${icon('star', 'icon')} PR attempt! Your best is ${esc(loadText(ex, r.maxLoad))}</span>`;
+  }
+  const key = cur.load ?? 'bw';
+  if (ex.mode === 'reps' && r.repsAt[key] != null && cur.reps > r.repsAt[key]) {
+    return `<span class="chip warn pr-try">${icon('star', 'icon')} Rep record attempt! Best is ${r.repsAt[key]}${cur.load != null ? ' at ' + esc(loadText(ex, cur.load)) : ''}</span>`;
+  }
+  if (ex.mode === 'time' && r.secsAt[key] != null && cur.secs > r.secsAt[key]) {
+    return `<span class="chip warn pr-try">${icon('star', 'icon')} Time record attempt! Best is ${fmtSecs(r.secsAt[key])}</span>`;
+  }
+  const last = lastPerformance(ex.id);
+  const lm = last ? maxLoadOf(last.sets) : null;
+  if (typeof cur.load === 'number' && lm !== null && cur.load > lm) {
+    return `<span class="chip good">${icon('up', 'icon')} Up from ${esc(loadText(ex, lm))} last time</span>`;
+  }
+  return '';
 }
 const totals = (a) => ({ done: a.items.reduce((n, it) => n + it.done.length, 0), all: a.items.reduce((n, it) => n + it.sets, 0) });
 
@@ -291,7 +352,8 @@ function playerView() {
         <div class="setdots" aria-label="Set ${setNo} of ${it.sets}">${dots}</div>
         <div class="target">${esc(ex.target ?? targetText(it, ex))}<small>Set ${setNo} of ${it.sets} · rest ${fmtSecs(it.rest)}</small></div>
       </div>
-      ${timing ? '' : `<div class="steppers ${steppers.length === 1 ? 'one' : ''}">${steppers.join('')}</div>`}
+      ${timing ? '' : `<div class="steppers ${steppers.length === 1 ? 'one' : ''}">${steppers.join('')}</div>
+        <div class="prchip" id="prChip">${prChip(a, it, ex)}</div>`}
       ${last && !timing ? `<p class="lastline">${icon('clock', 'icon')} Last time: <b>${esc(logLine(ex, last.sets))}</b></p>` : ''}
       ${timing ? '' : hint}
       <div class="cta">${cta}</div>
@@ -362,10 +424,16 @@ function completeSet() {
   } else s.reps = it.cur.reps;
   it.done.push(s);
 
-  let pb = false;
-  if (ex.load === 'kg' && s.load > 0 && !a.pbs.includes(ex.id)) {
-    const best = bestLoad(ex.id);
-    if (best !== null && s.load > best) { a.pbs.push(ex.id); pb = true; }
+  a.prs ??= []; a.beat ??= [];
+  const pr = detectPR(a, ex, s);
+  let bonus = null; let lastMax = null;
+  if (pr) { a.prs.push({ exId: ex.id, name: ex.name, ...pr }); bonus = 'pr'; }
+  else if (typeof s.load === 'number') {
+    const last = lastPerformance(ex.id);
+    lastMax = last ? maxLoadOf(last.sets) : null;
+    const prev = it.done.at(-2);
+    if (lastMax !== null && s.load > lastMax && !a.beat.includes(ex.id)) { a.beat.push(ex.id); bonus = 'beat'; }
+    else if (prev && typeof prev.load === 'number' && s.load > prev.load) bonus = 'step';
   }
   const after = before + 1;
   const crossedHalf = before < all / 2 && after >= all / 2 && after < all;
@@ -391,13 +459,28 @@ function completeSet() {
     a.restTotal = it.rest;
     if (ex.mode === 'reps') it.cur.reps = it.reps[1];
   }
-  if (pb) { msg.pb = true; msg.title = fx.say('pb'); msg.sub = `${fmtNum(s.load)} ${unitLabel()} on ${ex.name}. Heaviest yet!`; }
+  if (bonus === 'pr') {
+    msg.pr = true;
+    msg.title = fx.say({ load: 'prLoad', level: 'prLevel', reps: 'prReps', time: 'prTime' }[pr.type]);
+    msg.sub = `${ex.name}: ${prText(ex, pr)}`;
+    msg.tip = a.prs.length > 1 ? fx.say('prMore', { n: a.prs.length }) : exDone ? `${ex.name} done. What a way to finish it!` : 'Personal record. Remember this feeling!';
+  } else if (bonus === 'beat') {
+    msg.beat = true;
+    msg.title = fx.say('beatLast');
+    msg.sub = `${ex.name}: ${loadText(ex, s.load)}, up from ${loadText(ex, lastMax)} last time`;
+  } else if (bonus === 'step') {
+    msg.tip = fx.say('stepUp') + ' ' + msg.tip;
+  }
   a.msg = msg;
   a.phase = 'rest'; a.restEnd = Date.now() + a.restTotal * 1000; lastBeep = null;
   save();
-  fx.sound(exDone || pb ? 'exercise' : 'set');
-  fx.buzz(exDone ? [60, 40, 60, 40, 140] : 70);
-  fx.confetti(exDone || pb ? 1.6 : 0.7);
+  if (bonus === 'pr') { fx.sound('pr'); fx.buzz([80, 50, 80, 50, 80, 50, 260]); fx.confetti(2.6); }
+  else if (bonus === 'beat') { fx.sound('exercise'); fx.buzz([60, 40, 140]); fx.confetti(1.8); }
+  else {
+    fx.sound(exDone ? 'exercise' : 'set');
+    fx.buzz(exDone ? [60, 40, 60, 40, 140] : 70);
+    fx.confetti(exDone ? 1.6 : 0.7);
+  }
   fx.speak(msg.title);
   render();
 }
@@ -409,13 +492,18 @@ function finishWorkout() {
   if (!exs.length) { state.active = null; save(); go('home'); toast('Workout ended. Nothing was logged.'); return; }
   let sets = 0; let volume = 0;
   exs.forEach((e) => e.sets.forEach((s) => { sets++; if (getExercise(e.exId).load === 'kg' && s.reps) volume += s.load * s.reps; }));
+  const prs = a.prs ?? [];
+  const prev = [...state.history].reverse().find((x) => x.workoutId === a.workoutId && x.name === a.name);
   const h = {
     id: uid(), workoutId: a.workoutId, name: a.name, started: a.started, ended: Date.now(),
-    exercises: exs, pbs: a.pbs, sets, volume, msg: { title: fx.say('workout'), sub: fx.say('workoutSub') },
+    exercises: exs, prs, pbs: [...new Set(prs.map((p) => p.exId))], sets, volume, prevVolume: prev?.volume ?? null,
+    msg: prs.length
+      ? { title: fx.say('workoutPR'), sub: `${pl(prs.length, 'personal record')} broken today. Stronger than ever!` }
+      : { title: fx.say('workout'), sub: fx.say('workoutSub') },
   };
   state.history.push(h); state.active = null; save();
   go('done/' + h.id);
-  setTimeout(() => { fx.sound('workout'); fx.confetti(2.6); fx.buzz([100, 60, 100, 60, 300]); fx.speak(h.msg.title); }, 150);
+  setTimeout(() => { fx.sound('workout'); fx.confetti(prs.length ? 3.4 : 2.6); fx.buzz([100, 60, 100, 60, 300]); fx.speak(h.msg.title); }, 150);
 }
 
 // ---------------------------------------------------------------- REST OVERLAY
@@ -430,7 +518,8 @@ function showRest() {
   const top = ready
     ? `<div class="go-word">${esc(a.goMsg || "Let's go!")}</div>
        <p class="praise-sub" style="font-size:18px">${isEx ? `Time for ${esc(ex.name)}` : `Set ${setNo} of ${it.sets} · ${esc(ex.name)}`}</p>`
-    : `<div class="medal ${m.pb ? 'gold' : ''} ${isEx ? 'big' : ''}">${icon(m.pb ? 'star' : isEx ? 'trophy' : 'check')}</div>
+    : `<div class="medal ${m.pb || m.pr ? 'gold big' : ''} ${isEx || m.beat ? 'big' : ''}">${icon(m.pb || m.pr ? 'star' : m.beat ? 'up' : isEx ? 'trophy' : 'check')}</div>
+       ${m.pr ? `<div class="pr-banner">${icon('star', 'icon')} Personal record</div>` : m.beat ? '<div class="pr-banner beat">Progress</div>' : ''}
        <h2 class="praise">${esc(m.title)}</h2>
        <p class="praise-sub">${esc(m.sub)}</p>
        ${m.tip ? `<p class="tip">${esc(m.tip)}</p>` : ''}`;
@@ -449,7 +538,7 @@ function showRest() {
       <p class="small muted">Set ${setNo} of ${it.sets} · ${esc(ex.target ?? targetText(it, ex))}${loadText(ex, it.cur.load) ? ' · ' + esc(loadText(ex, it.cur.load)) : ''}</p></div></div>`;
   clearFigs(overlayFigs);
   const { done, all } = totals(a);
-  overlay.innerHTML = `<div class="rest ${ready ? 'ready' : ''}" role="dialog" aria-label="Rest">
+  overlay.innerHTML = `<div class="rest ${ready ? 'ready' : m.pr ? 'pr' : ''}" role="dialog" aria-label="Rest">
     <div class="rest-top">${progressBar(a)}<p class="small muted rest-count">${done} of ${all} sets done</p>${top}</div>${middle}
     <div class="rest-bottom">${ctrls}${upnext}</div></div>`;
   overlay.hidden = false;
@@ -507,9 +596,12 @@ function summaryView(id) {
     <div class="tiles section" style="margin-top:16px">
       <div class="tile"><b>${mins} min</b><span>Time</span></div>
       <div class="tile"><b>${h.sets}</b><span>Sets completed</span></div>
-      <div class="tile"><b>${h.volume ? Math.round(h.volume).toLocaleString() + ' ' + unitLabel() : h.exercises.length}</b><span>${h.volume ? 'Total weight moved' : 'Exercises'}</span></div>
-      <div class="tile"><b>${h.pbs.length}${h.pbs.length ? ' ' + icon('star', 'icon') : ''}</b><span>Personal bests</span></div>
+      <div class="tile"><b>${h.volume ? Math.round(h.volume).toLocaleString() + ' ' + unitLabel() : h.exercises.length}</b><span>${h.volume ? 'Total weight moved' : 'Exercises'}</span>
+        ${h.volume && h.prevVolume && h.volume > h.prevVolume ? `<span class="chip good" style="margin-top:6px">${icon('up', 'icon')} +${Math.round(h.volume - h.prevVolume).toLocaleString()} ${unitLabel()} vs last time</span>` : ''}</div>
+      <div class="tile"><b>${prsOf(h).length}${prsOf(h).length ? ' ' + icon('star', 'icon') : ''}</b><span>Personal records</span></div>
     </div>
+    ${prsOf(h).length ? `<div class="card section pr-card"><div class="pr-banner">${icon('star', 'icon')} ${pl(prsOf(h).length, 'new record')}</div>
+      <ul class="log">${prsOf(h).map((p) => `<li><span>${esc(p.name)}</span><span><b>${esc(prText(getExercise(p.exId), p))}</b></span></li>`).join('')}</ul></div>` : ''}
     <div class="card section" style="text-align:center">
       <div class="week-dots" style="gap:8px">${dots.replace(/<i/g, '<i style="width:16px;height:16px"')}</div>
       <h3 style="margin-top:8px">${wc >= goal ? 'Weekly goal smashed!' : `${wc} of ${goal} this week`}</h3>
@@ -519,9 +611,10 @@ function summaryView(id) {
     <div class="section"><a class="btn primary lg block" href="#/home">Done</a></div>`;
 }
 function logList(h) {
+  const prIds = new Set(prsOf(h).map((p) => p.exId));
   return `<ul class="log">${h.exercises.map((e) => {
     const ex = getExercise(e.exId);
-    return `<li><span>${esc(e.name)}${h.pbs.includes(e.exId) ? ' <span class="chip warn">PB</span>' : ''}</span><span>${esc(logLine(ex, e.sets))}</span></li>`;
+    return `<li><span>${esc(e.name)}${prIds.has(e.exId) ? ' <span class="chip warn">PR</span>' : ''}</span><span>${esc(logLine(ex, e.sets))}</span></li>`;
   }).join('')}</ul>`;
 }
 
@@ -534,14 +627,92 @@ function historyView() {
       <div class="tile"><b>${state.history.length}</b><span>Workouts</span></div>
       <div class="tile"><b>${weekStreak()}</b><span>Week streak</span></div>
       <div class="tile"><b>${thisWeekCount()}</b><span>This week</span></div>
-      <div class="tile"><b>${totalSets}</b><span>Total sets</span></div>
+      <div class="tile"><b>${totalPRs()}${totalPRs() ? ' ' + icon('star', 'icon') : ''}</b><span>Records broken</span></div>
     </div>
-    <div class="section stack">
-      ${hs.length ? hs.map((h) => `<details class="fold"><summary><div><div>${esc(h.name)}</div>
-          <div class="small muted" style="font-weight:500">${fmtDate(h.ended)} · ${Math.max(1, Math.round((h.ended - h.started) / 60000))} min · ${pl(h.sets, 'set')}${h.pbs.length ? ' · ' + pl(h.pbs.length, 'PB') : ''}</div></div></summary>
-          <div class="fold-body">${logList(h)}<button class="btn ghost danger" data-act="delHistory" data-id="${h.id}" style="margin-top:8px">${icon('trash')} Delete</button></div></details>`).join('')
+    ${recordsFold()}
+    <p class="small muted" style="margin-top:20px">Tap a workout to see what you did. Tap ${icon('repeat', 'icon')} to do it again, with the option to raise the weights first.</p>
+    <div class="section stack" style="margin-top:10px">
+      ${hs.length ? hs.map((h) => `<details class="fold"><summary><div style="flex:1;min-width:0"><div>${esc(h.name)}</div>
+          <div class="small muted" style="font-weight:500">${fmtDate(h.ended)} · ${Math.max(1, Math.round((h.ended - h.started) / 60000))} min · ${pl(h.sets, 'set')}${prsOf(h).length ? ` · <span style="color:var(--gold);font-weight:700">${pl(prsOf(h).length, 'PR')}</span>` : ''}</div></div>
+          <a class="icon-btn" href="#/repeat/${h.id}" data-act="repeat" data-id="${h.id}" aria-label="Repeat ${esc(h.name)}">${icon('repeat')}</a></summary>
+          <div class="fold-body">${logList(h)}
+            <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+              <a class="btn primary" href="#/repeat/${h.id}">${icon('repeat')} Repeat this workout</a>
+              <button class="btn ghost danger" data-act="delHistory" data-id="${h.id}">${icon('trash')} Delete</button></div></div></details>`).join('')
         : `<div class="card" style="text-align:center;padding:32px 16px"><h3>No workouts yet</h3><p class="muted small" style="margin-top:6px">Finish your first workout and it will show up here, logged like “20 × 12, 12”.</p></div>`}
     </div>`;
+}
+
+function recordsFold() {
+  const recs = allRecords().map((r) => ({ ...r, ex: getExercise(r.exId) })).sort((x, y) => x.ex.name.localeCompare(y.ex.name));
+  if (!recs.length) return '';
+  const txt = (r) => {
+    if (r.load != null) return loadText(r.ex, r.load) + (r.reps != null ? ` × ${r.reps}` : r.secs != null ? ` · ${fmtSecs(r.secs)}` : '');
+    if (r.reps != null) return `${r.reps} ${r.ex.perSide ? 'each side' : 'reps'}`;
+    return r.secs != null ? fmtSecs(r.secs) : '—';
+  };
+  return `<details class="fold section"><summary>${icon('trophy')} Personal records</summary><div class="fold-body">
+    <ul class="log">${recs.map((r) => `<li><span>${esc(r.ex.name)}<br><span class="small muted">${fmtDate(r.date)}</span></span><span><b>${esc(txt(r))}</b></span></li>`).join('')}</ul></div></details>`;
+}
+
+// ---------------------------------------------------------------- REPEAT A PAST WORKOUT
+let rep = null;
+function ensureRep(hid) {
+  if (rep?.hid === hid) return rep;
+  const h = state.history.find((x) => x.id === hid);
+  if (!h) { rep = null; return null; }
+  const w = state.workouts.find((x) => x.id === h.workoutId);
+  rep = {
+    hid, workoutId: h.workoutId, name: h.name, date: h.ended,
+    items: h.exercises.map((e) => {
+      const ex = getExercise(e.exId);
+      const tpl = w?.items.find((i) => i.exId === e.exId) ?? itemFromExercise(ex);
+      const it = { ...structuredClone(tpl), sets: e.sets.length };
+      if (ex.mode === 'time') it.secs = Math.max(...e.sets.map((s) => s.secs ?? 0)) || tpl.secs;
+      it.load = ex.load === 'none' ? null : maxLoadOf(e.sets) ?? tpl.load;
+      return { it, orig: it.load, origSecs: it.secs, sets: e.sets };
+    }),
+  };
+  return rep;
+}
+function repeatView(hid) {
+  const r = ensureRep(hid);
+  if (!r) return '<p>Workout not found.</p><a class="btn" href="#/history">Back</a>';
+  const anyLoad = r.items.some((x) => getExercise(x.it.exId).load !== 'none');
+  return `<div class="topbar"><button class="icon-btn" data-act="back" aria-label="Back">${icon('back')}</button><h2>Repeat workout</h2></div>
+    <div class="card">
+      <p class="eyebrow">From ${fmtDate(r.date)}</p>
+      <h2 style="margin:4px 0">${esc(r.name)}</h2>
+      <p class="small muted">Same exercises in the same order. Bump the weights up to chase new records, or keep them as they were.</p>
+      ${anyLoad ? `<div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+        <button class="btn good" data-act="repAll" data-d="1">${icon('up')} Level up everything</button>
+        <button class="btn ghost" data-act="repAll" data-d="0">Reset</button></div>` : ''}
+    </div>
+    <ul class="items section">${r.items.map(repRow).join('')}</ul>
+    <div class="sticky-foot"><button class="btn primary lg block" data-act="repStart">${icon('play')} Start workout</button></div>`;
+}
+function repRow(x, i) {
+  const { it } = x; const ex = getExercise(it.exId);
+  const st = (k, val, label) => `<label><span>${label}</span><div class="stepper sm">
+      <button data-act="repStep" data-i="${i}" data-k="${k}" data-d="-1" aria-label="Less ${label}">−</button>
+      <div class="val"><b>${esc(val)}</b></div>
+      <button data-act="repStep" data-i="${i}" data-k="${k}" data-d="1" aria-label="More ${label}">+</button></div></label>`;
+  const rec = records(ex.id);
+  let chip = '';
+  if (typeof it.load === 'number' && rec?.maxLoad != null && it.load > rec.maxLoad) chip = `<span class="chip warn">${icon('star', 'icon')} PR attempt</span>`;
+  else if (typeof it.load === 'number' && x.orig != null && it.load > x.orig) chip = `<span class="chip good">${icon('up', 'icon')} +${ex.load === 'kg' ? fmtNum(it.load - x.orig) + ' ' + unitLabel() : it.load - x.orig + ' level' + (it.load - x.orig > 1 ? 's' : '')}</span>`;
+  else if (ex.mode === 'time' && it.secs > x.origSecs) chip = `<span class="chip good">${icon('up', 'icon')} +${fmtSecs(it.secs - x.origSecs)}</span>`;
+  return `<li class="item"><div class="item-head" style="padding-left:10px">
+      <div class="thumb" data-fig="${ex.id}" data-static></div>
+      <div class="grow"><h3>${i + 1}. ${esc(ex.name)}</h3><p class="small muted">Last: ${esc(logLine(ex, x.sets))}</p></div></div>
+    <div class="item-edit" style="border-top:0;padding-top:0">
+      <div class="grid2">
+        ${ex.load !== 'none' ? st('load', ex.load === 'kg' ? fmtNum(it.load ?? 0) + ' ' + unitLabel() : 'Level ' + it.load, ex.load === 'kg' ? 'Weight' : 'Resistance') : ''}
+        ${ex.mode === 'time' ? st('secs', fmtSecs(it.secs), 'Time') : ''}
+        ${st('sets', it.sets, 'Sets')}
+      </div>
+      ${chip ? `<div>${chip}</div>` : ''}
+    </div></li>`;
 }
 
 // ---------------------------------------------------------------- LIBRARY & PICKER
@@ -822,6 +993,34 @@ setInterval(() => {
 const A = {
   start: (el) => startWorkout(el.dataset.id),
   resume: () => go('play'),
+  repeat: (el) => go('repeat/' + el.dataset.id),
+  repStep: (el) => {
+    const x = rep.items[+el.dataset.i]; const it = x.it; const ex = getExercise(it.exId); const d = +el.dataset.d;
+    if (el.dataset.k === 'load') {
+      if (ex.load === 'kg') it.load = Math.max(0, Math.round(((it.load ?? 0) + d * state.settings.step) * 100) / 100);
+      else it.load = Math.min(30, Math.max(1, (it.load ?? 5) + d));
+      const rec = records(ex.id);
+      if (d > 0 && rec?.maxLoad != null && it.load > rec.maxLoad) { fx.unlockAudio(); fx.sound('check'); fx.buzz(20); }
+    }
+    if (el.dataset.k === 'sets') it.sets = Math.min(10, Math.max(1, it.sets + d));
+    if (el.dataset.k === 'secs') it.secs = Math.max(5, it.secs + d * (it.secs >= 120 ? 30 : 5));
+    render();
+  },
+  repAll: (el) => {
+    const up = el.dataset.d === '1';
+    rep.items.forEach((x) => {
+      const ex = getExercise(x.it.exId);
+      if (ex.load === 'none') return;
+      if (!up) { x.it.load = x.orig; return; }
+      x.it.load = ex.load === 'kg' ? Math.round(((x.it.load ?? 0) + state.settings.step) * 100) / 100 : Math.min(30, (x.it.load ?? 5) + 1);
+    });
+    if (up) { fx.unlockAudio(); fx.sound('check'); toast('Everything up a notch. Records incoming!'); }
+    render();
+  },
+  repStart: () => {
+    const r = rep; rep = null;
+    startSession({ workoutId: r.workoutId, name: r.name, items: r.items.map((x) => x.it) }, true);
+  },
   back: () => (history.length > 1 ? history.back() : go('home')),
 
   // player
@@ -848,6 +1047,7 @@ const A = {
       return;
     }
     fx.buzz(8); save();
+    const pc = $('#prChip'); if (pc) pc.innerHTML = prChip(a, it, ex);
   },
   typeVal: (el) => {
     const a = state.active; const it = a.items[a.idx];

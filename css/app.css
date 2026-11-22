@@ -390,3 +390,24 @@ details.fold > .fold-body { padding: 0 16px 16px; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition: none !important; }
 }
+
+/* ---------- Records & progress ---------- */
+.chip .icon { width: 14px; height: 14px; }
+.prchip { display: flex; justify-content: center; margin-top: 10px; }
+.prchip:empty { display: none; }
+.pr-try { font-size: 13px; padding: 6px 12px; animation: glow 1.6s ease-in-out infinite; }
+.pr-banner {
+  display: inline-flex; align-items: center; gap: 6px; margin: 0 auto 10px; padding: 6px 14px; border-radius: 999px;
+  font-size: 12px; font-weight: 850; letter-spacing: .1em; text-transform: uppercase; color: #3A2A00;
+  background: linear-gradient(100deg, #F5B400 0%, #FFE27A 45%, #F5B400 55%, #E9A400 100%); background-size: 220% 100%;
+  animation: shimmer 2.2s linear infinite, pop .5s cubic-bezier(.2, 1.6, .4, 1) both;
+}
+.pr-banner .icon { width: 14px; height: 14px; }
+.pr-banner.beat { color: #fff; background: linear-gradient(100deg, var(--good), #48D6A3 50%, var(--good)); background-size: 220% 100%; }
+.rest.pr { background: radial-gradient(circle at 50% 18%, var(--gold-soft), var(--bg) 65%); }
+.rest.pr .ring .fg { stroke: var(--gold); }
+.pr-card { border: 2px solid var(--gold); text-align: center; }
+.pr-card .log { text-align: left; }
+.tile .chip { font-size: 11px; }
+@keyframes shimmer { from { background-position: 100% 0; } to { background-position: -120% 0; } }
+@keyframes glow { 0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--gold) 0%, transparent); } 50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--gold) 25%, transparent); } }

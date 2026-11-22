@@ -35,6 +35,14 @@ export const PRAISE = {
     'Future you says thanks.',
   ],
   pb: ['New personal best!', 'Heaviest yet!', 'PB unlocked!'],
+  prLoad: ['NEW PR!', 'Heaviest ever!', 'Personal record!', 'PR unlocked!', 'Record smashed!'],
+  prLevel: ['Resistance record!', 'Highest level ever!', 'New PR!'],
+  prReps: ['Rep record!', 'Most reps ever!', 'New rep PR!'],
+  prTime: ['Longest yet!', 'Time record!', 'New PR!'],
+  beatLast: ['Heavier than last time!', 'Stronger than last week!', "You've levelled up!", 'Progress! Up from last time.'],
+  stepUp: ['Stepping it up!', 'Going heavier. Love it!', 'Up we go!'],
+  prMore: ["That's PR number {n} today!", '{n} records in one session. Unreal!', 'PR #{n} today. You are on a roll!'],
+  workoutPR: ['Record-breaking session!', 'PR day!', 'New records set!'],
 };
 
 export const say = (key, vars = {}) => fresh(PRAISE[key]).replace(/\{(\w+)\}/g, (_, k) => vars[k] ?? '');
@@ -67,6 +75,10 @@ const SOUNDS = {
   set: () => { tone(523, 0, 0.18); tone(659, 0.09, 0.2); tone(784, 0.18, 0.35); },
   go: () => { tone(587, 0, 0.12, { type: 'triangle' }); tone(784, 0.1, 0.12, { type: 'triangle' }); tone(1175, 0.2, 0.35, { type: 'triangle' }); },
   exercise: () => [523, 659, 784, 1047, 1319].forEach((f, i) => tone(f, i * 0.08, 0.3, { vol: 0.15 })),
+  pr: () => {
+    [[659, 0], [784, 0.1], [988, 0.2], [1319, 0.3]].forEach(([f, s]) => tone(f, s, 0.25, { type: 'square', vol: 0.06 }));
+    [1047, 1319, 1568].forEach((f) => tone(f, 0.45, 0.8, { type: 'triangle', vol: 0.1 }));
+  },
   workout: () => {
     [[523, 0], [659, 0.12], [784, 0.24], [1047, 0.36], [784, 0.56], [1047, 0.7]].forEach(([f, s]) => tone(f, s, 0.35, { type: 'triangle', vol: 0.16 }));
     tone(1568, 0.85, 0.7, { vol: 0.1 });
